@@ -4,24 +4,32 @@ from contextlib import asynccontextmanager
 import os
 import threading
 
-from search_classic    import ClassicSearchEngine
-from search_embeddings import EmbeddingSearchEngine
+from search_classic import ClassicSearchEngine
 
 DATASET_PATH = os.path.join(os.path.dirname(__file__), "dataset", "icmla2019.csv")
+DISABLE_EMBEDDINGS = os.getenv("DISABLE_EMBEDDINGS", "false").lower() == "true"
 
 engines = {}
 loading_status = {"classic": False, "embedding": False, "error": None}
 
 def load_engines():
-    """Carga los motores en un hilo separado para no bloquear el arranque."""
     try:
         print("=== Cargando motores de búsqueda ===")
         print("1/2 Motor clásico (TF-IDF + Jaccard)...")
         engines["classic"] = ClassicSearchEngine(DATASET_PATH)
         loading_status["classic"] = True
-        print("2/2 Motor embeddings (all-mpnet-base-v2)...")
-        engines["embedding"] = EmbeddingSearchEngine(DATASET_PATH)
-        loading_status["embedding"] = True
+        print("  ClassicSearchEngine listo")
+
+        if not DISABLE_EMBEDDINGS:
+            from search_embeddings import EmbeddingSearchEngine
+            print("2/2 Motor embeddings (all-mpnet-base-v2)...")
+            engines["embedding"] = EmbeddingSearchEngine(DATASET_PATH)
+            loading_status["embedding"] = True
+            print("  EmbeddingSearchEngine listo")
+        else:
+            print("2/2 Motor embeddings DESHABILITADO (DISABLE_EMBEDDINGS=true)")
+            loading_status["embedding"] = "disabled"
+
         print("=== Todos los motores listos ===")
     except Exception as e:
         loading_status["error"] = str(e)
@@ -29,7 +37,6 @@ def load_engines():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Arrancar carga en hilo separado — el servidor levanta inmediatamente
     t = threading.Thread(target=load_engines, daemon=True)
     t.start()
     yield
@@ -44,15 +51,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 def _require_engine(name: str):
     if name not in engines:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Motor '{name}' aún cargando. Intenta en unos segundos."
-        )
+        status = loading_status.get(name)
+        if status == "disabled":
+            raise HTTPException(status_code=503, detail=f"Motor '{name}' deshabilitado en este entorno.")
+        raise HTTPException(status_code=503, detail=f"Motor '{name}' aún cargando. Intenta en unos segundos.")
     return engines[name]
-
 
 @app.get("/search/classic")
 def search_classic(
@@ -62,7 +67,6 @@ def search_classic(
 ):
     return _require_engine("classic").search(q, top_k=top_k, top_rec=top_rec)
 
-
 @app.get("/search/embeddings")
 def search_embeddings(
     q: str = Query(..., min_length=2),
@@ -70,7 +74,6 @@ def search_embeddings(
     top_rec: int = Query(3, ge=1, le=5),
 ):
     return _require_engine("embedding").search(q, top_k=top_k, top_rec=top_rec)
-
 
 @app.get("/stats")
 def stats():
@@ -85,11 +88,10 @@ def stats():
         "engines_ready": loading_status,
     }
 
-
 @app.get("/health")
 def health():
     return {
-        "status": "ok" if loading_status["classic"] and loading_status["embedding"] else "loading",
+        "status": "ok" if loading_status["classic"] else "loading",
         "engines_loaded": list(engines.keys()),
         "loading_status": loading_status,
     }
