@@ -6,8 +6,9 @@ __pycache__/
 *.pyd
 .Python
 
-# Embeddings cache (se regenera automáticamente)
-backend/dataset/.cache/
+# Embeddings cache - ignorar otros archivos pero mantener el correcto
+backend/dataset/.cache/embeddings_178dbf8d.npz
+backend/dataset/.cache/embeddings_9e01da01.npz
 
 # Node
 frontend/node_modules/
